@@ -698,12 +698,12 @@ begin
 end;
 $$;
 
-revoke all on function public.create_order(uuid, jsonb, jsonb, text, text, text) from public, anon, authenticated;
+revoke all on function public.create_order(uuid, jsonb, jsonb, text, jsonb, text) from public, anon, authenticated;
 revoke all on function public.transition_order(uuid, public.order_status) from public, anon, authenticated;
 revoke all on function public.release_expired_reservations() from public, anon, authenticated;
 revoke all on function public.adjust_inventory(uuid, uuid, integer, text) from public, anon, authenticated;
 
-grant execute on function public.create_order(uuid, jsonb, jsonb, text, text, text) to service_role;
+grant execute on function public.create_order(uuid, jsonb, jsonb, text, jsonb, text) to service_role;
 grant execute on function public.transition_order(uuid, public.order_status) to service_role;
 grant execute on function public.release_expired_reservations() to service_role;
 grant execute on function public.adjust_inventory(uuid, uuid, integer, text) to service_role;

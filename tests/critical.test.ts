@@ -171,6 +171,35 @@ describe("review hardening", () => {
     expect(order.id).toBeTruthy();
     await expect(demo.demoAdjustInventory(entrepreneur, itemBefore!.product_id, -999, "test")).rejects.toThrow("INSUFFICIENT_STOCK");
   });
+
+  it("rejects duplicate product lines that exceed stock in aggregate", async () => {
+    const business = await demo.demoGetBusinessBySlug("casa-nova");
+    const products = await demo.demoGetStoreCatalog(business!.id);
+    const product = products.find((item) => item.name === "Tote Canvas Minimal") ?? products[0];
+    await expect(
+      demo.demoCreateOrder({
+        business_slug: "casa-nova",
+        customer: { name: "Cliente Duplicado" },
+        items: [
+          { product_id: product.id, quantity: 3 },
+          { product_id: product.id, quantity: 3 },
+        ],
+        idempotency_key: "idem-duplicate-lines-01",
+      }),
+    ).rejects.toThrow("INSUFFICIENT_STOCK");
+    expect(store.getDemoDb().orders.some((order) => order.idempotency_key === "idem-duplicate-lines-01")).toBe(false);
+  });
+
+  it("does not persist product edits when stock validation fails", async () => {
+    const inventory = await demo.demoGetInventory(entrepreneur);
+    const item = inventory.find((candidate) => candidate.product_name === "Bolso Tejido Natural");
+    expect(item).toBeTruthy();
+    await expect(
+      demo.demoUpdateProduct(entrepreneur, item!.product_id, { name: "No Debe Cambiar", initial_stock: 1 }),
+    ).rejects.toThrow("INSUFFICIENT_STOCK");
+    const products = await demo.demoListBusinessProducts(entrepreneur);
+    expect(products.find((product) => product.id === item!.product_id)?.name).not.toBe("No Debe Cambiar");
+  });
 });
 
 describe("tenant isolation", () => {

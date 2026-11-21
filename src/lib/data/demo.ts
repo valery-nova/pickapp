@@ -307,6 +307,10 @@ export async function demoUpdateProduct(user: SessionUser, productId: string, in
   const db = getDemoDb();
   const product = db.products.find((item) => item.id === productId && item.business_id === business.id);
   if (!product) throw new Error("PRODUCT_NOT_FOUND");
+  if (input.initial_stock !== undefined) {
+    const inventory = db.inventory.find((item) => item.product_id === product.id);
+    if (inventory && Math.max(0, input.initial_stock) < inventory.reserved_quantity) throw new Error("INSUFFICIENT_STOCK");
+  }
   if (input.name) product.name = input.name.trim();
   if (input.description !== undefined) product.description = input.description.trim();
   if (input.category !== undefined) product.category = input.category.trim();
@@ -469,16 +473,20 @@ export async function demoCreateOrder(input: CreateOrderInput) {
   }> = [];
   let subtotal = 0;
   let currency = "BOB";
+  const requestedQuantities = new Map<string, number>();
   for (const item of input.items) {
+    requestedQuantities.set(item.product_id, (requestedQuantities.get(item.product_id) ?? 0) + item.quantity);
+  }
+  for (const [productId, quantity] of requestedQuantities) {
     const product = db.products.find(
-      (candidate) => candidate.id === item.product_id && candidate.business_id === business.id && candidate.status === "published",
+      (candidate) => candidate.id === productId && candidate.business_id === business.id && candidate.status === "published",
     );
     if (!product) throw new Error("PRODUCT_NOT_AVAILABLE");
     const inventory = db.inventory.find((candidate) => candidate.product_id === product.id);
     const available = inventory ? inventory.quantity - inventory.reserved_quantity : 0;
-    if (!inventory || available < item.quantity) throw new Error("INSUFFICIENT_STOCK");
-    preparedItems.push({ product, inventory, quantity: item.quantity, unitPrice: product.price });
-    subtotal += product.price * item.quantity;
+    if (!inventory || available < quantity) throw new Error("INSUFFICIENT_STOCK");
+    preparedItems.push({ product, inventory, quantity, unitPrice: product.price });
+    subtotal += product.price * quantity;
     currency = product.currency;
   }
 

@@ -402,6 +402,18 @@ export async function supabaseCreateProduct(user: SessionUser, input: CreateProd
 export async function supabaseUpdateProduct(user: SessionUser, productId: string, input: UpdateProductInput) {
   const { business } = await requireBusinessForUser(user);
   const supabase = getSupabaseServerClient();
+  if (input.initial_stock !== undefined) {
+    const inventoryCheck = await supabase
+      .from("inventory")
+      .select("reserved_quantity")
+      .eq("product_id", productId)
+      .eq("business_id", business.id)
+      .maybeSingle();
+    if (inventoryCheck.error) throw new Error(inventoryCheck.error.message);
+    if (inventoryCheck.data && Math.max(0, input.initial_stock) < Number(inventoryCheck.data.reserved_quantity)) {
+      throw new Error("INSUFFICIENT_STOCK");
+    }
+  }
   const update: Row = { updated_at: now() };
   if (input.name) update.name = input.name.trim();
   if (input.description !== undefined) update.description = input.description.trim();
