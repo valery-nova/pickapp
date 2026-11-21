@@ -29,6 +29,13 @@ export const env = {
   clerkPublishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
   n8nWebhookSecret: process.env.N8N_WEBHOOK_SECRET,
   n8nBaseUrl: process.env.N8N_BASE_URL,
+  avalancheFujiRpcUrl:
+    firstEnv(process.env.AVALANCHE_FUJI_RPC_URL) ?? "https://api.avax-test.network/ext/bc/C/rpc",
+  avalancheFujiChainId: Number(firstEnv(process.env.AVALANCHE_FUJI_CHAIN_ID) ?? "43113"),
+  avalancheFujiPrivateKey: firstEnv(process.env.AVALANCHE_FUJI_PRIVATE_KEY),
+  avalancheFujiAnchorAddress: firstEnv(process.env.AVALANCHE_FUJI_ANCHOR_ADDRESS),
+  avalancheFujiExplorerUrl:
+    firstEnv(process.env.AVALANCHE_FUJI_EXPLORER_URL) ?? "https://testnet.snowtrace.io/tx/",
   llmProvider: process.env.PICKAPP_LLM_PROVIDER ?? "openai",
   llmModel: process.env.PICKAPP_LLM_MODEL ?? "gpt-4o-mini",
   llmApiKey: firstEnv(
