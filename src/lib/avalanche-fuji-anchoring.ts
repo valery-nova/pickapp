@@ -83,6 +83,8 @@ async function confirmExistingAnchor(order: OrderDTO, receiptHash: string, paylo
       return { status: "error", anchored: false, tx_hash: txHash, explorer_url: current.explorer_url, error: "AVALANCHE_FUJI_TX_REVERTED" };
     }
     const blockNumber = receipt.blockNumber ?? null;
+    const cached = sentAnchors.get(anchorKey(order, receiptHash));
+    if (cached) cached.block_number = blockNumber;
     const explorerUrl = current.explorer_url ?? `${env.avalancheFujiExplorerUrl}${txHash}`;
     await recordAnchor(order, {
       order_id: order.id,
