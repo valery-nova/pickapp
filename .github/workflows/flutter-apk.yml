@@ -29,7 +29,7 @@ jobs:
         run: flutter pub get
       - name: Build debug APK
         working-directory: mobile
-        run: flutter build apk --debug --dart-define=API_BASE_URL=${API_BASE_URL:-https://gone-except-devices-chapters.trycloudflare.com}
+        run: flutter build apk --debug --dart-define=API_BASE_URL=${API_BASE_URL:-https://pickapp-heleng24s-projects.vercel.app}
       - uses: actions/upload-artifact@v4
         with:
           name: pickapp-apk
