@@ -48,7 +48,7 @@
         "options": {
           "response": {
             "response": {
-              "fullResponse": true
+              "fullResponse": true, "neverError": true
             }
           }
         }
