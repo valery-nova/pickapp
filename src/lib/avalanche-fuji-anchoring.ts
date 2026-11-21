@@ -71,22 +71,51 @@ async function recordAnchor(order: OrderDTO, payload: Record<string, unknown>) {
   if (result.error) throw new Error(result.error.message);
 }
 
+async function confirmExistingAnchor(order: OrderDTO, receiptHash: string, payload: Record<string, unknown>): Promise<FujiAnchorStatus> {
+  const current = statusFromPayload(payload);
+  if (current.status === "anchored") return current;
+  const txHash = String(payload.tx_hash);
+  try {
+    const provider = new JsonRpcProvider(env.avalancheFujiRpcUrl, env.avalancheFujiChainId);
+    const receipt = await provider.getTransactionReceipt(txHash);
+    if (!receipt) return current;
+    if (receipt.status === 0) {
+      return { status: "error", anchored: false, tx_hash: txHash, explorer_url: current.explorer_url, error: "AVALANCHE_FUJI_TX_REVERTED" };
+    }
+    const blockNumber = receipt.blockNumber ?? null;
+    const explorerUrl = current.explorer_url ?? `${env.avalancheFujiExplorerUrl}${txHash}`;
+    await recordAnchor(order, {
+      order_id: order.id,
+      receipt_hash: receiptHash,
+      tx_hash: txHash,
+      explorer_url: explorerUrl,
+      block_number: blockNumber,
+      confirmed: true,
+      chain_id: env.avalancheFujiChainId,
+      anchored_at: typeof payload.anchored_at === "string" ? payload.anchored_at : new Date().toISOString(),
+      confirmed_at: new Date().toISOString(),
+    }).catch(() => undefined);
+    return { status: "anchored", anchored: true, tx_hash: txHash, explorer_url: explorerUrl, block_number: blockNumber };
+  } catch {
+    return current;
+  }
+}
+
 async function anchorOrderReceipt(order: OrderDTO, receiptHash: string): Promise<FujiAnchorStatus> {
   const key = anchorKey(order, receiptHash);
   const cached = sentAnchors.get(key);
   if (cached) {
-    return {
-      status: cached.block_number === null ? "pending" : "anchored",
-      anchored: true,
+    return confirmExistingAnchor(order, receiptHash, {
       tx_hash: cached.tx_hash,
       explorer_url: cached.explorer_url,
       block_number: cached.block_number,
-    };
+      confirmed: cached.block_number !== null,
+    });
   }
 
   try {
     const existing = await findAnchor(order, receiptHash);
-    if (existing?.tx_hash) return statusFromPayload(existing);
+    if (existing?.tx_hash) return confirmExistingAnchor(order, receiptHash, existing);
 
     const provider = new JsonRpcProvider(env.avalancheFujiRpcUrl, env.avalancheFujiChainId);
     const wallet = new Wallet(env.avalancheFujiPrivateKey as string, provider);
