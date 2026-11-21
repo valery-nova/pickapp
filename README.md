@@ -57,6 +57,6 @@ Critical coverage: validation, idempotent orders, inventory reservation/confirma
 ## Not implemented yet / pending
 
 - Real payment provider (orders stop at confirmed/manual states).
-- Clerk UI components are prepared but demo auth is the runnable path without keys.
+- Clerk auth is implemented; demo auth remains for credential-free local runs.
 - Supabase Realtime subscription UI for LIVE is polling-based in MVP; schema/RPC supports realtime.
-- Avalanche Fuji hash receipts are intentionally deferred until the main flow is stable.
+- Avalanche Fuji is prepared as verifiable SHA-256 order receipts at `GET /api/orders/[id]/receipt` with no personal data; on-chain anchoring is still pending Fuji credentials.

@@ -573,6 +573,15 @@ export async function supabaseListOrders(user: SessionUser, status?: OrderStatus
   return orders;
 }
 
+export async function supabaseGetOrder(user: SessionUser, orderId: string) {
+  const { business } = await requireBusinessForUser(user);
+  const supabase = getSupabaseServerClient();
+  const existing = await supabase.from("orders").select("id,business_id").eq("id", orderId).eq("business_id", business.id).maybeSingle();
+  if (existing.error) throw new Error(existing.error.message);
+  if (!existing.data) throw new Error("ORDER_NOT_FOUND");
+  return orderDTO(orderId);
+}
+
 export async function supabaseUpdateOrderStatus(user: SessionUser, orderId: string, status: OrderStatusType) {
   const { business } = await requireBusinessForUser(user);
   const supabase = getSupabaseServerClient();

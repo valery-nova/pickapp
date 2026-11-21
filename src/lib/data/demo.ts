@@ -585,6 +585,15 @@ export async function demoListOrders(user: SessionUser, status?: OrderStatusType
     .map((order) => orderDTO(order.id));
 }
 
+export async function demoGetOrder(user: SessionUser, orderId: string) {
+  const business = requireBusinessForUser(user);
+  const db = getDemoDb();
+  expireReservations();
+  const order = db.orders.find((item) => item.id === orderId && item.business_id === business.id);
+  if (!order) throw new Error("ORDER_NOT_FOUND");
+  return orderDTO(order.id);
+}
+
 export async function demoUpdateOrderStatus(user: SessionUser, orderId: string, status: OrderStatusType) {
   const business = requireBusinessForUser(user);
   const db = getDemoDb();

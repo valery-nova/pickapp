@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import { orderReceiptHash, orderReceiptPayload } from "@/lib/avalanche-fuji";
 import type { SessionUser } from "@/lib/types";
 
 type Demo = typeof import("@/lib/data/demo");
@@ -199,6 +200,27 @@ describe("review hardening", () => {
     ).rejects.toThrow("INSUFFICIENT_STOCK");
     const products = await demo.demoListBusinessProducts(entrepreneur);
     expect(products.find((product) => product.id === item!.product_id)?.name).not.toBe("No Debe Cambiar");
+  });
+});
+
+describe("avalanche fuji receipt", () => {
+  it("creates a stable sha256 receipt without personal data", async () => {
+    const business = await demo.demoGetBusinessBySlug("casa-nova");
+    const products = await demo.demoGetStoreCatalog(business!.id);
+    const product = products.find((item) => item.name === "Labial Matte Cereza") ?? products[0];
+    const order = await demo.demoCreateOrder({
+      business_slug: "casa-nova",
+      customer: { name: "Cliente Hash", email: "hash@example.com", phone: "123" },
+      items: [{ product_id: product.id, quantity: 1 }],
+      idempotency_key: "idem-receipt-hash-01",
+    });
+    const payload = orderReceiptPayload(order);
+    const serialized = JSON.stringify(payload);
+    expect(orderReceiptHash(order)).toBe(orderReceiptHash(order));
+    expect(payload.items).toHaveLength(1);
+    expect(serialized).not.toContain("Cliente Hash");
+    expect(serialized).not.toContain("hash@example.com");
+    expect(serialized).not.toContain('"123"');
   });
 });
 

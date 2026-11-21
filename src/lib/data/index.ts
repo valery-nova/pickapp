@@ -79,6 +79,10 @@ export async function listOrders(user: SessionUser, status?: OrderStatus): Promi
   return useSupabase ? supabase.supabaseListOrders(user, status) : demo.demoListOrders(user, status);
 }
 
+export async function getOrder(user: SessionUser, orderId: string): Promise<OrderDTO> {
+  return useSupabase ? supabase.supabaseGetOrder(user, orderId) : demo.demoGetOrder(user, orderId);
+}
+
 export async function updateOrderStatus(user: SessionUser, orderId: string, status: OrderStatus): Promise<OrderDTO> {
   return useSupabase ? supabase.supabaseUpdateOrderStatus(user, orderId, status) : demo.demoUpdateOrderStatus(user, orderId, status);
 }
