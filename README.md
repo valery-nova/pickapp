@@ -6,7 +6,7 @@ Social commerce copilot for women entrepreneurs: store, AI product sheets, publi
 
 - Next.js 16 App Router + React 19 + TypeScript + Tailwind CSS 4
 - Supabase PostgreSQL/Storage/RLS/RPC migrations (`supabase/migrations`)
-- Clerk-ready auth with demo cookie fallback
+- Clerk auth with demo cookie fallback for credential-free runs
 - n8n exportable workflows in `n8n/workflows`
 - LLM product drafts and assistant via OpenAI-compatible API or n8n webhook
 
@@ -29,7 +29,7 @@ Demo credentials are not real accounts; `PICKAPP_DEMO_SEED=false` starts empty.
 2. Set `PICKAPP_DATA_MODE=supabase`, `PICKAPP_AUTH_MODE=clerk`, Supabase keys and Clerk keys.
 3. Apply `supabase/migrations/20251121000000_init.sql` to Supabase SQL editor or CLI.
 4. Create Storage bucket `product-images` (public read is enough for MVP images).
-5. Set `PICKAPP_LLM_API_KEY`/`PICKAPP_LLM_MODEL` or `N8N_BASE_URL` for AI routes.
+5. Set `PICKAPP_LLM_API_KEY` plus `PICKAPP_LLM_BASE_URL`/`PICKAPP_LLM_MODEL` for AI routes. Verified free OpenRouter vision model: `nvidia/nemotron-3.5-super-vl:free` with `PICKAPP_LLM_BASE_URL=https://openrouter.ai/api/v1`.
 6. `npm run build && npm start`.
 
 ## Architecture

@@ -11,7 +11,9 @@ export const env = {
   appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
   dataMode:
     process.env.PICKAPP_DATA_MODE === "supabase" ||
-    (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
+    (process.env.PICKAPP_DATA_MODE !== "demo" &&
+      process.env.SUPABASE_URL &&
+      process.env.SUPABASE_SERVICE_ROLE_KEY)
       ? "supabase"
       : "demo",
   authMode:
