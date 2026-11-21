@@ -11,7 +11,12 @@ const productDraftSchema = z.object({
   visible_features: z.array(z.string().max(160)).max(12),
   promotional_text: z.string().max(1000),
   suggested_price: z.number().nonnegative().nullable(),
-  confidence: z.enum(["low", "medium", "high"]),
+  confidence: z.preprocess((value) => {
+    const text = String(value ?? "").toLowerCase();
+    if (text.includes("high")) return "high";
+    if (text.includes("medium")) return "medium";
+    return "low";
+  }, z.enum(["low", "medium", "high"])),
   warnings: z.array(z.string().max(240)).max(10),
 });
 
