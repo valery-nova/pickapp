@@ -58,16 +58,7 @@ export function LiveShopping({ session, storeSlug, businessName }: { session: Li
   const [toast, setToast] = useState<{ title: string; sub?: string } | null>(null);
   const [featuredIndex, setFeaturedIndex] = useState(0);
   const [commentProductId, setCommentProductId] = useState("");
-  const [saved, setSaved] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      const raw = window.localStorage.getItem("pickapp-live-saved");
-      const ids = raw ? JSON.parse(raw) : [];
-      return Array.isArray(ids) && ids.includes(session.id);
-    } catch {
-      return false;
-    }
-  });
+  const [saved, setSaved] = useState(false);
   const safeFeaturedIndex = featuredProducts.length === 0 ? 0 : Math.min(featuredIndex, featuredProducts.length - 1);
   const featured = featuredProducts[safeFeaturedIndex] ?? null;
 
@@ -87,6 +78,19 @@ export function LiveShopping({ session, storeSlug, businessName }: { session: Li
     const timer = setInterval(load, 5000);
     return () => clearInterval(timer);
   }, [load]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try {
+        const raw = window.localStorage.getItem("pickapp-live-saved");
+        const ids = raw ? JSON.parse(raw) : [];
+        setSaved(Array.isArray(ids) && ids.includes(session.id));
+      } catch {
+        setSaved(false);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [session.id]);
 
   function showToast(title: string, sub?: string) {
     setToast({ title, sub });
