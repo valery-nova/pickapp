@@ -4,6 +4,9 @@ const hasClerk = Boolean(
   process.env.CLERK_SECRET_KEY && process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
 );
 
+const firstEnv = (...values: Array<string | undefined>) =>
+  values.find((value) => typeof value === "string" && value.trim().length > 0);
+
 export const env = {
   appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
   dataMode:
@@ -26,10 +29,11 @@ export const env = {
   n8nBaseUrl: process.env.N8N_BASE_URL,
   llmProvider: process.env.PICKAPP_LLM_PROVIDER ?? "openai",
   llmModel: process.env.PICKAPP_LLM_MODEL ?? "gpt-4o-mini",
-  llmApiKey:
-    process.env.OPENAI_API_KEY ??
-    process.env.ANTHROPIC_API_KEY ??
+  llmApiKey: firstEnv(
     process.env.PICKAPP_LLM_API_KEY,
+    process.env.OPENAI_API_KEY,
+    process.env.ANTHROPIC_API_KEY,
+  ),
   demoSeed: process.env.PICKAPP_DEMO_SEED !== "false",
 } as const;
 
