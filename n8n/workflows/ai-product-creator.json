@@ -31,17 +31,13 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{$env.PICKAPP_APP_URL}}/api/products/draft",
+        "url": "https://pickapp--tea708m4.preview.devinapps.com/api/products/draft",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "content-type",
               "value": "application/json"
-            },
-            {
-              "name": "x-pickapp-webhook-secret",
-              "value": "={{$env.N8N_WEBHOOK_SECRET}}"
             }
           ]
         },

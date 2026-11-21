@@ -11,53 +11,30 @@
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [
-        0,
-        0
-      ]
+      "position": [0, 0]
     },
     {
       "parameters": {
-        "jsCode": "return [{ json: { body: $json.body ?? $json, headers: $json.headers ?? {} } }];"
+        "jsCode": "const body = $json.body ?? $json;\nreturn [{ json: { payload: body } }];"
       },
       "name": "Normalize",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        220,
-        0
-      ]
+      "position": [220, 0]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{$env.PICKAPP_APP_URL}}/api/assistant",
+        "url": "https://pickapp--tea708m4.preview.devinapps.com/api/assistant",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {
-              "name": "content-type",
-              "value": "application/json"
-            },
-            {
-              "name": "x-pickapp-webhook-secret",
-              "value": "={{$env.N8N_WEBHOOK_SECRET}}"
-            }
+            { "name": "content-type", "value": "application/json" }
           ]
         },
         "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "business_slug",
-              "value": "{{$json.body.business_slug}}"
-            },
-            {
-              "name": "message",
-              "value": "{{$json.body.message}}"
-            }
-          ]
-        },
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
         "options": {
           "response": {
             "response": {
@@ -69,10 +46,7 @@
       "name": "Call PickApp",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        440,
-        0
-      ]
+      "position": [440, 0]
     },
     {
       "parameters": {
@@ -83,45 +57,18 @@
       "name": "Respond",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [
-        660,
-        0
-      ]
+      "position": [660, 0]
     }
   ],
   "connections": {
     "Webhook": {
-      "main": [
-        [
-          {
-            "node": "Normalize",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Normalize", "type": "main", "index": 0 }]]
     },
     "Normalize": {
-      "main": [
-        [
-          {
-            "node": "Call PickApp",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Call PickApp", "type": "main", "index": 0 }]]
     },
     "Call PickApp": {
-      "main": [
-        [
-          {
-            "node": "Respond",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
     }
   },
   "settings": {
