@@ -707,3 +707,12 @@ grant execute on function public.create_order(uuid, jsonb, jsonb, text, jsonb, t
 grant execute on function public.transition_order(uuid, public.order_status) to service_role;
 grant execute on function public.release_expired_reservations() to service_role;
 grant execute on function public.adjust_inventory(uuid, uuid, integer, text) to service_role;
+
+-- PostgREST role grants. RLS policies still control row access.
+grant usage on schema public to anon, authenticated, service_role;
+grant select, insert, update, delete on all tables in schema public to anon, authenticated, service_role;
+grant usage, select on all sequences in schema public to anon, authenticated, service_role;
+alter default privileges in schema public
+  grant select, insert, update, delete on tables to anon, authenticated, service_role;
+alter default privileges in schema public
+  grant usage, select on sequences to anon, authenticated, service_role;
