@@ -53,7 +53,7 @@
         "options": {
           "response": {
             "response": {
-              "fullResponse": true, "neverError": true
+              "fullResponse": true
             }
           }
         }
@@ -71,7 +71,7 @@
         "respondWith": "json",
         "responseBody": "={{ $json.body ?? $json }}",
         "options": {
-          "responseCode": "={{ Number($json.statusCode) || 200 }}"
+          "responseCode": "={{ $json.statusCode ?? 200 }}"
         }
       },
       "name": "Respond",
