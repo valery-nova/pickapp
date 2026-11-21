@@ -489,6 +489,45 @@ begin
 end;
 $$;
 
+create or replace function public.adjust_inventory(
+  p_business_id uuid,
+  p_product_id uuid,
+  p_delta integer,
+  p_reason text default 'manual'
+)
+returns public.inventory
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_inventory public.inventory;
+begin
+  select * into v_inventory
+    from public.inventory
+    where product_id = p_product_id
+      and business_id = p_business_id
+    for update;
+  if not found then
+    raise exception 'INVENTORY_NOT_FOUND';
+  end if;
+  if v_inventory.quantity + p_delta < v_inventory.reserved_quantity then
+    raise exception 'INSUFFICIENT_STOCK';
+  end if;
+
+  update public.inventory
+    set quantity = quantity + p_delta,
+        updated_at = now()
+    where id = v_inventory.id
+    returning * into v_inventory;
+
+  insert into public.inventory_movements (business_id, product_id, delta, reason, reference_type, reference_id)
+  values (p_business_id, p_product_id, p_delta, p_reason, 'manual', null);
+
+  return v_inventory;
+end;
+$$;
+
 create or replace function public.transition_order(p_order_id uuid, p_status public.order_status)
 returns public.orders
 language plpgsql
@@ -498,16 +537,51 @@ as $$
 declare
   v_order public.orders;
   v_reservation public.inventory_reservations;
+  v_item record;
+  v_allowed public.order_status[];
+  v_reserved integer;
+  v_should_restock boolean;
 begin
   select * into v_order from public.orders where id = p_order_id for update;
   if not found then
     raise exception 'ORDER_NOT_FOUND';
   end if;
 
+  v_allowed := case v_order.status
+    when 'pending' then array['awaiting_payment', 'confirmed', 'cancelled', 'expired']::public.order_status[]
+    when 'awaiting_payment' then array['confirmed', 'cancelled', 'expired']::public.order_status[]
+    when 'confirmed' then array['processing', 'cancelled']::public.order_status[]
+    when 'processing' then array['shipped', 'cancelled']::public.order_status[]
+    when 'shipped' then array['delivered']::public.order_status[]
+    else array[]::public.order_status[]
+  end;
+  if not (p_status = any(v_allowed)) then
+    raise exception 'INVALID_ORDER_TRANSITION';
+  end if;
+
   if p_status in ('confirmed', 'processing', 'shipped', 'delivered') then
+    if v_order.status in ('pending', 'awaiting_payment') then
+      for v_item in
+        select product_id, sum(quantity)::integer as quantity
+        from public.order_items
+        where order_id = p_order_id
+        group by product_id
+      loop
+        select coalesce(sum(quantity), 0)::integer into v_reserved
+        from public.inventory_reservations
+        where order_id = p_order_id
+          and product_id = v_item.product_id
+          and status = 'active'
+          and expires_at > now();
+        if v_reserved < v_item.quantity then
+          raise exception 'RESERVATION_EXPIRED_OR_MISSING';
+        end if;
+      end loop;
+    end if;
+
     for v_reservation in
       select * from public.inventory_reservations
-      where order_id = p_order_id and status = 'active'
+      where order_id = p_order_id and status = 'active' and expires_at > now()
       for update
     loop
       update public.inventory
@@ -522,15 +596,25 @@ begin
       values (v_order.business_id, v_reservation.product_id, -v_reservation.quantity, 'order_' || p_status::text, 'order', p_order_id);
     end loop;
   elsif p_status in ('cancelled', 'expired') then
+    v_should_restock := v_order.status in ('confirmed', 'processing');
     for v_reservation in
       select * from public.inventory_reservations
-      where order_id = p_order_id and status = 'active'
+      where order_id = p_order_id and status in ('active', 'consumed')
       for update
     loop
-      update public.inventory
-        set reserved_quantity = greatest(reserved_quantity - v_reservation.quantity, 0),
-            updated_at = now()
-        where product_id = v_reservation.product_id;
+      if v_reservation.status = 'active' then
+        update public.inventory
+          set reserved_quantity = greatest(reserved_quantity - v_reservation.quantity, 0),
+              updated_at = now()
+          where product_id = v_reservation.product_id;
+      elsif v_should_restock then
+        update public.inventory
+          set quantity = quantity + v_reservation.quantity,
+              updated_at = now()
+          where product_id = v_reservation.product_id;
+        insert into public.inventory_movements (business_id, product_id, delta, reason, reference_type, reference_id)
+        values (v_order.business_id, v_reservation.product_id, v_reservation.quantity, 'order_' || p_status::text || '_restock', 'order', p_order_id);
+      end if;
       update public.inventory_reservations
         set status = case when p_status = 'expired' then 'expired' else 'released' end::public.reservation_status
         where id = v_reservation.id;
@@ -541,7 +625,7 @@ begin
     set status = p_status,
         updated_at = now(),
         confirmed_at = case when p_status in ('confirmed', 'processing', 'shipped', 'delivered') then coalesce(confirmed_at, now()) else confirmed_at end,
-        paid_at = case when p_status in ('awaiting_payment', 'confirmed', 'processing', 'shipped', 'delivered') and p_status <> 'pending' then coalesce(paid_at, now()) else paid_at end
+        paid_at = case when p_status in ('confirmed', 'processing', 'shipped', 'delivered') then coalesce(paid_at, now()) else paid_at end
     where id = p_order_id
     returning * into v_order;
 
@@ -561,6 +645,8 @@ as $$
 declare
   v_count integer := 0;
   v_reservation record;
+  v_order_id uuid;
+  v_order_status public.order_status;
 begin
   for v_reservation in
     select * from public.inventory_reservations
@@ -574,13 +660,50 @@ begin
     update public.inventory_reservations
       set status = 'expired'
       where id = v_reservation.id;
-    if v_reservation.order_id is not null then
-      update public.orders
-        set status = 'expired', updated_at = now()
-        where id = v_reservation.order_id and status = 'pending';
-    end if;
     v_count := v_count + 1;
   end loop;
+
+  for v_order_id in
+    select distinct order_id
+    from public.inventory_reservations
+    where status = 'expired'
+      and expires_at < now()
+      and order_id is not null
+  loop
+    select status into v_order_status
+      from public.orders
+      where id = v_order_id
+      for update;
+    if v_order_status in ('pending', 'awaiting_payment') then
+      for v_reservation in
+        select * from public.inventory_reservations
+        where order_id = v_order_id and status = 'active'
+        for update
+      loop
+        update public.inventory
+          set reserved_quantity = greatest(reserved_quantity - v_reservation.quantity, 0),
+              updated_at = now()
+          where product_id = v_reservation.product_id;
+        update public.inventory_reservations
+          set status = 'expired'
+          where id = v_reservation.id;
+      end loop;
+      update public.orders
+        set status = 'expired', updated_at = now()
+        where id = v_order_id;
+    end if;
+  end loop;
+
   return v_count;
 end;
 $$;
+
+revoke all on function public.create_order(uuid, jsonb, jsonb, text, text, text) from public, anon, authenticated;
+revoke all on function public.transition_order(uuid, public.order_status) from public, anon, authenticated;
+revoke all on function public.release_expired_reservations() from public, anon, authenticated;
+revoke all on function public.adjust_inventory(uuid, uuid, integer, text) from public, anon, authenticated;
+
+grant execute on function public.create_order(uuid, jsonb, jsonb, text, text, text) to service_role;
+grant execute on function public.transition_order(uuid, public.order_status) to service_role;
+grant execute on function public.release_expired_reservations() to service_role;
+grant execute on function public.adjust_inventory(uuid, uuid, integer, text) to service_role;

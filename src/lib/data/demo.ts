@@ -1,7 +1,7 @@
 import "server-only";
 import { getDemoDb } from "@/lib/demo/store";
 import { uniqueSlug } from "@/lib/utils";
-import type { SessionUser } from "@/lib/types";
+import type { DemoDb, SessionUser } from "@/lib/types";
 import type {
   AnalyticsReport,
   AssistantCatalogItem,
@@ -114,12 +114,18 @@ function orderDTO(orderId: string): OrderDTO {
 }
 
 function liveSessionDTO(sessionId: string): LiveSessionDTO {
+  expireReservations();
   const db = getDemoDb();
   const session = db.liveSessions.find((item) => item.id === sessionId);
   if (!session) throw new Error("LIVE_SESSION_NOT_FOUND");
+  const featuredIds = new Set(session.featured_product_ids);
+  const featuredProducts = db.products
+    .filter((product) => featuredIds.has(product.id) && product.business_id === session.business_id && product.status === "published")
+    .sort((a, b) => session.featured_product_ids.indexOf(a.id) - session.featured_product_ids.indexOf(b.id))
+    .map((product) => productDTO(product.id));
   return {
     ...session,
-    featured_products: session.featured_product_ids.map((productId) => productDTO(productId)),
+    featured_products: featuredProducts,
   };
 }
 
@@ -201,6 +207,7 @@ export async function demoGetBusinessBySlug(slug: string) {
 }
 
 export async function demoGetStoreCatalog(businessId: string, query: CatalogQuery = {}) {
+  expireReservations();
   const db = getDemoDb();
   const category = query.category?.trim().toLowerCase();
   return db.products
@@ -214,6 +221,7 @@ export async function demoGetStoreCatalog(businessId: string, query: CatalogQuer
 }
 
 export async function demoGetStoreProduct(businessId: string, productId: string) {
+  expireReservations();
   const db = getDemoDb();
   const product = db.products.find(
     (item) => item.id === productId && item.business_id === businessId && item.status === "published",
@@ -329,7 +337,9 @@ export async function demoUpdateProduct(user: SessionUser, productId: string, in
   if (input.initial_stock !== undefined) {
     const inventory = db.inventory.find((item) => item.product_id === product.id);
     if (inventory) {
-      inventory.quantity = Math.max(0, input.initial_stock);
+      const nextQuantity = Math.max(0, input.initial_stock);
+      if (nextQuantity < inventory.reserved_quantity) throw new Error("INSUFFICIENT_STOCK");
+      inventory.quantity = nextQuantity;
       inventory.updated_at = now();
     }
   }
@@ -351,6 +361,7 @@ export async function demoUpdateProduct(user: SessionUser, productId: string, in
 
 export async function demoGetInventory(user: SessionUser): Promise<InventoryDTO[]> {
   const business = requireBusinessForUser(user);
+  expireReservations();
   const db = getDemoDb();
   return db.inventory
     .filter((item) => item.business_id === business.id)
@@ -381,7 +392,7 @@ export async function demoAdjustInventory(
   const inventory = db.inventory.find((item) => item.product_id === productId && item.business_id === business.id);
   if (!inventory) throw new Error("INVENTORY_NOT_FOUND");
   const nextQuantity = inventory.quantity + delta;
-  if (nextQuantity < 0) throw new Error("INSUFFICIENT_STOCK");
+  if (nextQuantity < inventory.reserved_quantity) throw new Error("INSUFFICIENT_STOCK");
   inventory.quantity = nextQuantity;
   inventory.updated_at = now();
   db.inventoryMovements.push({
@@ -411,6 +422,7 @@ function expireReservations() {
   const expired = db.inventoryReservations.filter(
     (reservation) => reservation.status === "active" && new Date(reservation.expires_at).getTime() < Date.now(),
   );
+  const affectedOrderIds = new Set<string>();
   for (const reservation of expired) {
     const inventory = db.inventory.find((item) => item.product_id === reservation.product_id);
     if (inventory) {
@@ -418,11 +430,23 @@ function expireReservations() {
       inventory.updated_at = now();
     }
     reservation.status = "expired";
-    const order = db.orders.find((item) => item.id === reservation.order_id);
-    if (order && order.status === "pending") {
-      order.status = "expired";
-      order.updated_at = now();
+    if (reservation.order_id) affectedOrderIds.add(reservation.order_id);
+  }
+  for (const orderId of affectedOrderIds) {
+    const order = db.orders.find((item) => item.id === orderId);
+    if (!order || !["pending", "awaiting_payment"].includes(order.status)) continue;
+    for (const reservation of db.inventoryReservations.filter(
+      (item) => item.order_id === orderId && item.status === "active",
+    )) {
+      const inventory = db.inventory.find((item) => item.product_id === reservation.product_id);
+      if (inventory) {
+        inventory.reserved_quantity = Math.max(0, inventory.reserved_quantity - reservation.quantity);
+        inventory.updated_at = now();
+      }
+      reservation.status = "expired";
     }
+    order.status = "expired";
+    order.updated_at = now();
   }
 }
 
@@ -436,6 +460,27 @@ export async function demoCreateOrder(input: CreateOrderInput) {
   );
   if (existing) return orderDTO(existing.id);
   if (input.items.length === 0) throw new Error("ORDER_EMPTY");
+
+  const preparedItems: Array<{
+    product: DemoDb["products"][number];
+    inventory: DemoDb["inventory"][number];
+    quantity: number;
+    unitPrice: number;
+  }> = [];
+  let subtotal = 0;
+  let currency = "BOB";
+  for (const item of input.items) {
+    const product = db.products.find(
+      (candidate) => candidate.id === item.product_id && candidate.business_id === business.id && candidate.status === "published",
+    );
+    if (!product) throw new Error("PRODUCT_NOT_AVAILABLE");
+    const inventory = db.inventory.find((candidate) => candidate.product_id === product.id);
+    const available = inventory ? inventory.quantity - inventory.reserved_quantity : 0;
+    if (!inventory || available < item.quantity) throw new Error("INSUFFICIENT_STOCK");
+    preparedItems.push({ product, inventory, quantity: item.quantity, unitPrice: product.price });
+    subtotal += product.price * item.quantity;
+    currency = product.currency;
+  }
 
   const customer = {
     id: id(),
@@ -453,9 +498,9 @@ export async function demoCreateOrder(input: CreateOrderInput) {
     business_id: business.id,
     customer_id: customer.id,
     status: "pending" as OrderStatusType,
-    subtotal: 0,
-    total: 0,
-    currency: "BOB",
+    subtotal,
+    total: subtotal,
+    currency,
     idempotency_key: input.idempotency_key,
     shipping_address: input.shipping_address ?? null,
     notes: input.notes ?? null,
@@ -466,43 +511,28 @@ export async function demoCreateOrder(input: CreateOrderInput) {
   };
   db.orders.push(order);
 
-  let subtotal = 0;
-  let currency = "BOB";
-  for (const item of input.items) {
-    const product = db.products.find(
-      (candidate) => candidate.id === item.product_id && candidate.business_id === business.id && candidate.status === "published",
-    );
-    if (!product) throw new Error("PRODUCT_NOT_AVAILABLE");
-    const inventory = db.inventory.find((candidate) => candidate.product_id === product.id);
-    const available = inventory ? inventory.quantity - inventory.reserved_quantity : 0;
-    if (!inventory || available < item.quantity) throw new Error("INSUFFICIENT_STOCK");
-    const unitPrice = product.price;
-    subtotal += unitPrice * item.quantity;
-    currency = product.currency;
+  for (const item of preparedItems) {
     db.orderItems.push({
       id: id(),
       order_id: order.id,
-      product_id: product.id,
-      product_name: product.name,
-      unit_price: unitPrice,
+      product_id: item.product.id,
+      product_name: item.product.name,
+      unit_price: item.unitPrice,
       quantity: item.quantity,
     });
     db.inventoryReservations.push({
       id: id(),
       business_id: business.id,
-      product_id: product.id,
+      product_id: item.product.id,
       order_id: order.id,
       quantity: item.quantity,
       status: "active",
       expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
       created_at: now(),
     });
-    inventory.reserved_quantity += item.quantity;
-    inventory.updated_at = now();
+    item.inventory.reserved_quantity += item.quantity;
+    item.inventory.updated_at = now();
   }
-  order.subtotal = subtotal;
-  order.total = subtotal;
-  order.currency = currency;
   order.updated_at = now();
 
   db.automationLogs.push({
@@ -580,12 +610,27 @@ export async function demoUpdateOrderStatus(user: SessionUser, orderId: string, 
     if (!order.confirmed_at) order.confirmed_at = now();
   }
   if (["cancelled", "expired"].includes(status)) {
+    const shouldRestock = order.status === "confirmed" || order.status === "processing";
     for (const reservation of db.inventoryReservations.filter(
-      (item) => item.order_id === order.id && item.status === "active",
+      (item) => item.order_id === order.id && (item.status === "active" || item.status === "consumed"),
     )) {
       const inventory = db.inventory.find((item) => item.product_id === reservation.product_id);
       if (inventory) {
-        inventory.reserved_quantity = Math.max(0, inventory.reserved_quantity - reservation.quantity);
+        if (reservation.status === "active") {
+          inventory.reserved_quantity = Math.max(0, inventory.reserved_quantity - reservation.quantity);
+        } else if (shouldRestock) {
+          inventory.quantity += reservation.quantity;
+          db.inventoryMovements.push({
+            id: id(),
+            business_id: business.id,
+            product_id: reservation.product_id,
+            delta: reservation.quantity,
+            reason: `order_${status}_restock`,
+            reference_type: "order",
+            reference_id: order.id,
+            created_at: now(),
+          });
+        }
         inventory.updated_at = now();
       }
       reservation.status = status === "expired" ? "expired" : "released";
@@ -683,6 +728,11 @@ export async function demoListLiveSessions(user: SessionUser) {
 export async function demoCreateLiveSession(user: SessionUser, input: { title: string; description?: string; featured_product_ids?: string[] }) {
   const business = requireBusinessForUser(user);
   const db = getDemoDb();
+  const featuredIds = input.featured_product_ids ?? [];
+  for (const productId of featuredIds) {
+    const product = db.products.find((item) => item.id === productId && item.business_id === business.id && item.status === "published");
+    if (!product) throw new Error("PRODUCT_NOT_AVAILABLE");
+  }
   const session = {
     id: id(),
     business_id: business.id,
@@ -731,6 +781,10 @@ export async function demoAddLiveComment(input: { live_session_id: string; custo
   const db = getDemoDb();
   const session = db.liveSessions.find((item) => item.id === input.live_session_id);
   if (!session) throw new Error("LIVE_SESSION_NOT_FOUND");
+  if (input.product_id) {
+    const product = db.products.find((item) => item.id === input.product_id && item.business_id === session.business_id && item.status === "published");
+    if (!product) throw new Error("PRODUCT_NOT_AVAILABLE");
+  }
   const comment = {
     id: id(),
     live_session_id: session.id,
@@ -758,7 +812,7 @@ export async function demoListLiveComments(liveSessionId: string): Promise<LiveC
     .filter((comment) => comment.live_session_id === liveSessionId)
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
     .map((comment) => {
-      const product = comment.product_id ? db.products.find((item) => item.id === comment.product_id) : null;
+      const product = comment.product_id ? db.products.find((item) => item.id === comment.product_id && item.status === "published") : null;
       return {
         ...comment,
         product_name: product?.name ?? null,

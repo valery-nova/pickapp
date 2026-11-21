@@ -1,7 +1,7 @@
 import { apiError, json, optionalApiUser, parseJson } from "@/lib/api";
 import { generateAssistantReply } from "@/lib/ai";
 import { getAssistantCatalog, getBusinessBySlug } from "@/lib/data";
-import { appendAssistantExchange, listConversationMessages } from "@/lib/conversations";
+import { appendAssistantExchange, assertConversationInBusiness, listConversationMessages } from "@/lib/conversations";
 import { assistantMessageSchema } from "@/lib/validation";
 
 export async function POST(request: Request) {
@@ -10,6 +10,7 @@ export async function POST(request: Request) {
     const input = await parseJson(request, assistantMessageSchema);
     const business = await getBusinessBySlug(input.business_slug);
     if (!business) return json({ error: "BUSINESS_NOT_FOUND" }, 404);
+    if (input.conversation_id) await assertConversationInBusiness(input.conversation_id, business.id);
     const [catalog, history] = await Promise.all([
       getAssistantCatalog(business.id),
       input.conversation_id ? listConversationMessages(input.conversation_id) : Promise.resolve([]),

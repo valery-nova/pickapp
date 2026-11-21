@@ -37,6 +37,12 @@ function unwrap<T>({ data, error }: { data: T | null; error: { message?: string 
   return data;
 }
 
+async function releaseExpiredReservations() {
+  const supabase = getSupabaseServerClient();
+  const result = await supabase.rpc("release_expired_reservations");
+  if (result.error) throw new Error(result.error.message);
+}
+
 async function ensureProfile(user: SessionUser) {
   const supabase = getSupabaseServerClient();
   let query = supabase.from("profiles").select("*");
@@ -204,11 +210,19 @@ async function liveSessionDTO(sessionId: string) {
   const supabase = getSupabaseServerClient();
   const sessionResult = await supabase.from("live_sessions").select("*").eq("id", sessionId).single();
   const session = unwrap(sessionResult) as Row;
-  const featured = await productsDTO(
-    (session.featured_product_ids ?? []).length
-      ? (await supabase.from("products").select("*").in("id", session.featured_product_ids)).data ?? []
-      : [],
-  );
+  const featuredIds = (session.featured_product_ids ?? []) as string[];
+  const featuredResult = featuredIds.length
+    ? await supabase
+        .from("products")
+        .select("*")
+        .in("id", featuredIds)
+        .eq("business_id", session.business_id)
+        .eq("status", "published")
+    : { data: [], error: null };
+  if (featuredResult.error) throw new Error(featuredResult.error.message);
+  const featuredProducts = await productsDTO((featuredResult.data ?? []) as Row[]);
+  const featuredOrder = new Map(featuredIds.map((productId, index) => [productId, index]));
+  featuredProducts.sort((a, b) => (featuredOrder.get(a.id) ?? 0) - (featuredOrder.get(b.id) ?? 0));
   return {
     id: session.id,
     business_id: session.business_id,
@@ -216,7 +230,7 @@ async function liveSessionDTO(sessionId: string) {
     description: session.description ?? null,
     status: session.status,
     featured_product_ids: session.featured_product_ids ?? [],
-    featured_products: featured,
+    featured_products: featuredProducts,
     started_at: session.started_at ?? null,
     ended_at: session.ended_at ?? null,
     created_at: session.created_at,
@@ -294,6 +308,7 @@ function matchesCatalog(product: ProductDTO, query: CatalogQuery) {
 
 export async function supabaseGetStoreCatalog(businessId: string, query: CatalogQuery = {}) {
   const supabase = getSupabaseServerClient();
+  await releaseExpiredReservations();
   let builder = supabase.from("products").select("*").eq("business_id", businessId).eq("status", "published");
   if (query.category) builder = builder.eq("category", query.category);
   if (query.featured) builder = builder.eq("featured", true);
@@ -305,6 +320,7 @@ export async function supabaseGetStoreCatalog(businessId: string, query: Catalog
 
 export async function supabaseGetStoreProduct(businessId: string, productId: string) {
   const supabase = getSupabaseServerClient();
+  await releaseExpiredReservations();
   const result = await supabase
     .from("products")
     .select("*")
@@ -414,26 +430,37 @@ export async function supabaseUpdateProduct(user: SessionUser, productId: string
     }
   }
   if (input.initial_stock !== undefined || input.low_stock_threshold !== undefined) {
-    const inventoryUpdate: Row = {};
-    if (input.initial_stock !== undefined) inventoryUpdate.quantity = Math.max(0, input.initial_stock);
-    if (input.low_stock_threshold !== undefined) inventoryUpdate.low_stock_threshold = input.low_stock_threshold;
-    inventoryUpdate.updated_at = now();
-    const inventoryResult = await supabase
+    const existingInventory = await supabase
       .from("inventory")
-      .update(inventoryUpdate)
+      .select("*")
       .eq("product_id", product.id)
       .eq("business_id", business.id)
-      .select("*")
       .maybeSingle();
-    if (inventoryResult.error) throw new Error(inventoryResult.error.message);
-    if (!inventoryResult.data) {
-      await supabase.from("inventory").insert({
+    if (existingInventory.error) throw new Error(existingInventory.error.message);
+    const nextQuantity = input.initial_stock !== undefined ? Math.max(0, input.initial_stock) : undefined;
+    if (existingInventory.data && nextQuantity !== undefined && nextQuantity < Number(existingInventory.data.reserved_quantity)) {
+      throw new Error("INSUFFICIENT_STOCK");
+    }
+    if (existingInventory.data) {
+      const inventoryUpdate: Row = { updated_at: now() };
+      if (nextQuantity !== undefined) inventoryUpdate.quantity = nextQuantity;
+      if (input.low_stock_threshold !== undefined) inventoryUpdate.low_stock_threshold = input.low_stock_threshold;
+      const inventoryResult = await supabase
+        .from("inventory")
+        .update(inventoryUpdate)
+        .eq("id", existingInventory.data.id)
+        .select("*")
+        .single();
+      if (inventoryResult.error) throw new Error(inventoryResult.error.message);
+    } else {
+      const insertResult = await supabase.from("inventory").insert({
         business_id: business.id,
         product_id: product.id,
-        quantity: input.initial_stock ?? 0,
+        quantity: nextQuantity ?? 0,
         reserved_quantity: 0,
         low_stock_threshold: input.low_stock_threshold ?? 3,
       });
+      if (insertResult.error) throw new Error(insertResult.error.message);
     }
   }
   await supabase.from("automation_logs").insert({
@@ -449,6 +476,7 @@ export async function supabaseUpdateProduct(user: SessionUser, productId: string
 export async function supabaseGetInventory(user: SessionUser): Promise<InventoryDTO[]> {
   const { business } = await requireBusinessForUser(user);
   const supabase = getSupabaseServerClient();
+  await releaseExpiredReservations();
   const [inventoryResult, productsResult] = await Promise.all([
     supabase.from("inventory").select("*").eq("business_id", business.id),
     supabase.from("products").select("id,name").eq("business_id", business.id),
@@ -475,23 +503,18 @@ export async function supabaseGetInventory(user: SessionUser): Promise<Inventory
 export async function supabaseAdjustInventory(user: SessionUser, productId: string, delta: number, reason: string) {
   const { business } = await requireBusinessForUser(user);
   const supabase = getSupabaseServerClient();
-  const inventoryResult = await supabase
-    .from("inventory")
-    .select("*")
-    .eq("product_id", productId)
-    .eq("business_id", business.id)
-    .single();
-  const inventory = unwrap(inventoryResult) as Row;
-  const nextQuantity = Number(inventory.quantity) + delta;
-  if (nextQuantity < 0) throw new Error("INSUFFICIENT_STOCK");
-  await supabase.from("inventory").update({ quantity: nextQuantity, updated_at: now() }).eq("id", inventory.id);
-  await supabase.from("inventory_movements").insert({
-    business_id: business.id,
-    product_id: productId,
-    delta,
-    reason,
-    reference_type: "manual",
+  const rpc = await supabase.rpc("adjust_inventory", {
+    p_business_id: business.id,
+    p_product_id: productId,
+    p_delta: delta,
+    p_reason: reason,
   });
+  if (rpc.error) {
+    const message = rpc.error.message ?? "INVENTORY_ADJUST_FAILED";
+    if (message.includes("INSUFFICIENT_STOCK")) throw new Error("INSUFFICIENT_STOCK");
+    if (message.includes("INVENTORY_NOT_FOUND")) throw new Error("INVENTORY_NOT_FOUND");
+    throw new Error(message);
+  }
   await supabase.from("automation_logs").insert({
     business_id: business.id,
     workflow: "inventory-automation",
@@ -616,6 +639,17 @@ export async function supabaseListLiveSessions(user: SessionUser) {
 export async function supabaseCreateLiveSession(user: SessionUser, input: { title: string; description?: string; featured_product_ids?: string[] }) {
   const { business } = await requireBusinessForUser(user);
   const supabase = getSupabaseServerClient();
+  const featuredIds = input.featured_product_ids ?? [];
+  if (featuredIds.length) {
+    const featuredResult = await supabase
+      .from("products")
+      .select("id")
+      .in("id", featuredIds)
+      .eq("business_id", business.id)
+      .eq("status", "published");
+    if (featuredResult.error) throw new Error(featuredResult.error.message);
+    if ((featuredResult.data ?? []).length !== new Set(featuredIds).size) throw new Error("PRODUCT_NOT_AVAILABLE");
+  }
   const result = await supabase
     .from("live_sessions")
     .insert({
@@ -648,6 +682,17 @@ export async function supabaseAddLiveComment(input: { live_session_id: string; c
   const supabase = getSupabaseServerClient();
   const sessionResult = await supabase.from("live_sessions").select("business_id").eq("id", input.live_session_id).single();
   if (sessionResult.error || !sessionResult.data) throw new Error("LIVE_SESSION_NOT_FOUND");
+  if (input.product_id) {
+    const productResult = await supabase
+      .from("products")
+      .select("id")
+      .eq("id", input.product_id)
+      .eq("business_id", sessionResult.data.business_id)
+      .eq("status", "published")
+      .maybeSingle();
+    if (productResult.error) throw new Error(productResult.error.message);
+    if (!productResult.data) throw new Error("PRODUCT_NOT_AVAILABLE");
+  }
   const result = await supabase
     .from("live_comments")
     .insert({
@@ -674,8 +719,12 @@ export async function supabaseListLiveComments(liveSessionId: string): Promise<L
   const result = await supabase.from("live_comments").select("*").eq("live_session_id", liveSessionId).order("created_at", { ascending: true });
   if (result.error) throw new Error(result.error.message);
   const comments = result.data ?? [];
+  const sessionResult = await supabase.from("live_sessions").select("business_id").eq("id", liveSessionId).maybeSingle();
+  if (sessionResult.error) throw new Error(sessionResult.error.message);
   const productIds = [...new Set(comments.map((comment: Row) => comment.product_id).filter(Boolean))];
-  const productsResult = productIds.length ? await supabase.from("products").select("id,name").in("id", productIds) : { data: [], error: null };
+  const productsResult = productIds.length && sessionResult.data?.business_id
+    ? await supabase.from("products").select("id,name").in("id", productIds).eq("business_id", sessionResult.data.business_id).eq("status", "published")
+    : { data: [], error: null };
   if (productsResult.error) throw new Error(productsResult.error.message);
   const names = new Map((productsResult.data ?? []).map((product: Row) => [product.id, product.name]));
   return comments.map((comment: Row) => ({ ...comment, product_name: comment.product_id ? names.get(comment.product_id) ?? null : null })) as LiveCommentDTO[];
@@ -724,9 +773,10 @@ export async function supabaseGetAnalyticsReport(user: SessionUser, days = 30): 
 }
 
 export async function supabaseListPublicLiveSessions(businessId: string) {
+  await releaseExpiredReservations();
   const { data, error } = await getSupabaseServerClient()
     .from("live_sessions")
-    .select("*, live_session_products(product_id)")
+    .select("*")
     .eq("business_id", businessId)
     .in("status", ["live", "scheduled"])
     .order("created_at", { ascending: false });

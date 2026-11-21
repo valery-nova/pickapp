@@ -79,7 +79,6 @@ describe("demo orders and inventory", () => {
   });
 
   it("confirms an order and consumes reserved inventory", async () => {
-    const business = await demo.demoGetBusinessBySlug("casa-nova");
     const before = await demo.demoGetInventory(entrepreneur);
     const itemBefore = before.find((item) => item.product_name === "Vestido Midi Floral");
     expect(itemBefore).toBeTruthy();
@@ -94,6 +93,83 @@ describe("demo orders and inventory", () => {
     const itemAfter = after.find((item) => item.product_id === itemBefore!.product_id);
     expect(itemBefore!.quantity - itemAfter!.quantity).toBe(1);
     expect(itemAfter!.reserved_quantity).toBe(0);
+  });
+});
+
+describe("review hardening", () => {
+  it("does not persist rejected orders", async () => {
+    const business = await demo.demoGetBusinessBySlug("casa-nova");
+    const products = await demo.demoGetStoreCatalog(business!.id);
+    const before = (await demo.demoGetStoreCatalog(business!.id)).find((item) => item.id === products[0].id)?.available_quantity ?? 0;
+    await expect(
+      demo.demoCreateOrder({
+        business_slug: "casa-nova",
+        customer: { name: "Cliente Rejected" },
+        items: [
+          { product_id: products[0].id, quantity: 1 },
+          { product_id: "missing-product", quantity: 1 },
+        ],
+        idempotency_key: "idem-rejected-order-01",
+      }),
+    ).rejects.toThrow("PRODUCT_NOT_AVAILABLE");
+    expect(store.getDemoDb().orders.some((order) => order.idempotency_key === "idem-rejected-order-01")).toBe(false);
+    const after = (await demo.demoGetStoreCatalog(business!.id)).find((item) => item.id === products[0].id)?.available_quantity ?? 0;
+    expect(after).toBe(before);
+  });
+
+  it("expires unpaid holds and blocks confirmation", async () => {
+    const business = await demo.demoGetBusinessBySlug("casa-nova");
+    const products = await demo.demoGetStoreCatalog(business!.id);
+    const product = products.find((item) => item.name === "Labial Matte Cereza") ?? products[products.length - 1];
+    const before = product.available_quantity ?? 0;
+    const order = await demo.demoCreateOrder({
+      business_slug: "casa-nova",
+      customer: { name: "Cliente Expira" },
+      items: [{ product_id: product.id, quantity: 1 }],
+      idempotency_key: "idem-expire-hold-0001",
+    });
+    const reservation = store.getDemoDb().inventoryReservations.find((item) => item.order_id === order.id);
+    expect(reservation).toBeTruthy();
+    reservation!.expires_at = new Date(Date.now() - 1000).toISOString();
+    await demo.demoGetStoreCatalog(business!.id);
+    const orders = await demo.demoListOrders(entrepreneur);
+    expect(orders.find((item) => item.id === order.id)?.status).toBe("expired");
+    await expect(demo.demoUpdateOrderStatus(entrepreneur, order.id, "confirmed")).rejects.toThrow("INVALID_ORDER_TRANSITION");
+    const after = (await demo.demoGetStoreCatalog(business!.id)).find((item) => item.id === product.id)?.available_quantity ?? 0;
+    expect(after).toBe(before);
+  });
+
+  it("restocks inventory when cancelling a confirmed order", async () => {
+    const before = await demo.demoGetInventory(entrepreneur);
+    const itemBefore = before.find((item) => item.product_name === "Tote Canvas Minimal");
+    expect(itemBefore).toBeTruthy();
+    const order = await demo.demoCreateOrder({
+      business_slug: "casa-nova",
+      customer: { name: "Cliente Cancel" },
+      items: [{ product_id: itemBefore!.product_id, quantity: 2 }],
+      idempotency_key: "idem-cancel-restock-01",
+    });
+    await demo.demoUpdateOrderStatus(entrepreneur, order.id, "confirmed");
+    const confirmed = (await demo.demoGetInventory(entrepreneur)).find((item) => item.product_id === itemBefore!.product_id);
+    expect(itemBefore!.quantity - (confirmed?.quantity ?? 0)).toBe(2);
+    await demo.demoUpdateOrderStatus(entrepreneur, order.id, "cancelled");
+    const cancelled = (await demo.demoGetInventory(entrepreneur)).find((item) => item.product_id === itemBefore!.product_id);
+    expect(cancelled?.quantity).toBe(itemBefore!.quantity);
+    expect(cancelled?.reserved_quantity).toBe(0);
+  });
+
+  it("rejects stock adjustments below active reservations", async () => {
+    const before = await demo.demoGetInventory(entrepreneur);
+    const itemBefore = before.find((item) => item.product_name === "Bolso Tejido Natural");
+    expect(itemBefore).toBeTruthy();
+    const order = await demo.demoCreateOrder({
+      business_slug: "casa-nova",
+      customer: { name: "Cliente Reserva" },
+      items: [{ product_id: itemBefore!.product_id, quantity: 1 }],
+      idempotency_key: "idem-adjust-reserved-01",
+    });
+    expect(order.id).toBeTruthy();
+    await expect(demo.demoAdjustInventory(entrepreneur, itemBefore!.product_id, -999, "test")).rejects.toThrow("INSUFFICIENT_STOCK");
   });
 });
 

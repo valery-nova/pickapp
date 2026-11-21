@@ -8,6 +8,22 @@ function now() {
   return new Date().toISOString();
 }
 
+export async function assertConversationInBusiness(conversationId: string, businessId: string) {
+  if (env.dataMode === "supabase") {
+    const supabase = getSupabaseServerClient();
+    const { data, error } = await supabase
+      .from("conversations")
+      .select("business_id")
+      .eq("id", conversationId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data || data.business_id !== businessId) throw new Error("CONVERSATION_NOT_FOUND");
+    return;
+  }
+  const conversation = getDemoDb().conversations.find((item) => item.id === conversationId);
+  if (!conversation || conversation.business_id !== businessId) throw new Error("CONVERSATION_NOT_FOUND");
+}
+
 export async function appendAssistantExchange(input: {
   businessId: string;
   conversationId?: string;
@@ -19,6 +35,7 @@ export async function appendAssistantExchange(input: {
   assistantReply: string;
   referencedProductIds?: string[];
 }): Promise<{ conversationId: string; userMessageId: string; assistantMessageId: string }> {
+  if (input.conversationId) await assertConversationInBusiness(input.conversationId, input.businessId);
   if (env.dataMode === "supabase") {
     const supabase = getSupabaseServerClient();
     let customerId: string | null = null;
