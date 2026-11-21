@@ -1,5 +1,7 @@
+import { ClerkAuth } from "@/components/clerk-auth";
 import { DemoLoginForm } from "@/components/demo-login-form";
 import { SiteHeader } from "@/components/site-header";
+import { env } from "@/lib/env";
 
 export default function LoginPage() {
   return (
@@ -8,8 +10,8 @@ export default function LoginPage() {
       <main className="mx-auto flex w-full max-w-md flex-1 items-center px-4 py-12">
         <div className="w-full rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <h1 className="text-2xl font-bold text-slate-900">Entra a PICKAPP</h1>
-          <p className="mt-2 text-sm text-slate-600">Elige si vas a vender o comprar. En modo demo no hay contraseña.</p>
-          <div className="mt-6"><DemoLoginForm /></div>
+          <p className="mt-2 text-sm text-slate-600">{env.authMode === "clerk" ? "Entra con tu cuenta para vender o comprar." : "Elige si vas a vender o comprar. En modo demo no hay contraseña."}</p>
+          <div className="mt-6">{env.authMode === "clerk" ? <ClerkAuth /> : <DemoLoginForm />}</div>
         </div>
       </main>
     </div>

@@ -3,11 +3,12 @@ import { BusinessForm } from "@/components/business-form";
 import { SiteHeader } from "@/components/site-header";
 import { getSessionUser } from "@/lib/auth";
 import { getBusinessForUser } from "@/lib/data";
+import { env } from "@/lib/env";
 
 export default async function OnboardingPage() {
   const user = await getSessionUser();
   if (!user) redirect("/login");
-  if (user.role !== "entrepreneur") redirect("/store/casa-nova");
+  if (env.authMode === "demo" && user.role !== "entrepreneur") redirect("/store/casa-nova");
   const business = await getBusinessForUser(user);
   if (business) redirect("/dashboard");
   return (
