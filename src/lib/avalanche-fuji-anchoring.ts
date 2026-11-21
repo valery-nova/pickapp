@@ -18,8 +18,29 @@ export interface FujiAnchorStatus {
   error?: string;
 }
 
+const anchorPromises = new Map<string, Promise<FujiAnchorStatus>>();
+const sentAnchors = new Map<string, { tx_hash: string; explorer_url: string; block_number: number | null }>();
+
 function isConfigured() {
   return env.dataMode === "supabase" && Boolean(env.avalancheFujiPrivateKey);
+}
+
+function anchorKey(order: OrderDTO, receiptHash: string) {
+  return `${order.id}:${receiptHash}`;
+}
+
+function statusFromPayload(payload: Record<string, unknown>): FujiAnchorStatus {
+  const txHash = String(payload.tx_hash);
+  const explorerUrl = payload.explorer_url ? String(payload.explorer_url) : `${env.avalancheFujiExplorerUrl}${txHash}`;
+  const blockNumber = typeof payload.block_number === "number" ? payload.block_number : null;
+  const confirmed = payload.confirmed === true || blockNumber !== null;
+  return {
+    status: confirmed ? "anchored" : "pending",
+    anchored: true,
+    tx_hash: txHash,
+    explorer_url: explorerUrl,
+    block_number: blockNumber,
+  };
 }
 
 async function findAnchor(order: OrderDTO, receiptHash: string) {
@@ -30,13 +51,12 @@ async function findAnchor(order: OrderDTO, receiptHash: string) {
     .eq("business_id", order.business_id)
     .eq("workflow", WORKFLOW)
     .eq("event", EVENT)
-    .limit(200);
+    .contains("payload", { order_id: order.id, receipt_hash: receiptHash })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
   if (result.error) throw new Error(result.error.message);
-  const rows = (result.data ?? []) as Array<{ payload: Record<string, unknown> | null }>;
-  return rows
-    .map((row) => row.payload)
-    .filter((payload): payload is Record<string, unknown> => Boolean(payload))
-    .find((payload) => payload.order_id === order.id && payload.receipt_hash === receiptHash);
+  return (result.data?.payload as Record<string, unknown> | null) ?? null;
 }
 
 async function recordAnchor(order: OrderDTO, payload: Record<string, unknown>) {
@@ -51,22 +71,22 @@ async function recordAnchor(order: OrderDTO, payload: Record<string, unknown>) {
   if (result.error) throw new Error(result.error.message);
 }
 
-export async function getOrderReceiptAnchor(order: OrderDTO): Promise<FujiAnchorStatus> {
-  if (!isConfigured()) return { status: "prepared", anchored: false };
+async function anchorOrderReceipt(order: OrderDTO, receiptHash: string): Promise<FujiAnchorStatus> {
+  const key = anchorKey(order, receiptHash);
+  const cached = sentAnchors.get(key);
+  if (cached) {
+    return {
+      status: cached.block_number === null ? "pending" : "anchored",
+      anchored: true,
+      tx_hash: cached.tx_hash,
+      explorer_url: cached.explorer_url,
+      block_number: cached.block_number,
+    };
+  }
 
-  const receiptHash = orderReceiptHash(order);
   try {
     const existing = await findAnchor(order, receiptHash);
-    if (existing && existing.tx_hash) {
-      const txHash = String(existing.tx_hash);
-      return {
-        status: "anchored",
-        anchored: true,
-        tx_hash: txHash,
-        explorer_url: existing.explorer_url ? String(existing.explorer_url) : `${env.avalancheFujiExplorerUrl}${txHash}`,
-        block_number: typeof existing.block_number === "number" ? existing.block_number : null,
-      };
-    }
+    if (existing?.tx_hash) return statusFromPayload(existing);
 
     const provider = new JsonRpcProvider(env.avalancheFujiRpcUrl, env.avalancheFujiChainId);
     const wallet = new Wallet(env.avalancheFujiPrivateKey as string, provider);
@@ -77,30 +97,79 @@ export async function getOrderReceiptAnchor(order: OrderDTO): Promise<FujiAnchor
       data: `0x${receiptHash}`,
       gasLimit: 100_000,
     });
-    const receipt = await tx.wait();
     const explorerUrl = `${env.avalancheFujiExplorerUrl}${tx.hash}`;
-    const payload = {
+    const sent = { tx_hash: tx.hash, explorer_url: explorerUrl, block_number: null as number | null };
+    sentAnchors.set(key, sent);
+
+    await recordAnchor(order, {
       order_id: order.id,
       receipt_hash: receiptHash,
       tx_hash: tx.hash,
-      block_number: receipt?.blockNumber ?? null,
-      chain_id: env.avalancheFujiChainId,
       explorer_url: explorerUrl,
+      block_number: null,
+      confirmed: false,
+      chain_id: env.avalancheFujiChainId,
       anchored_at: new Date().toISOString(),
-    };
-    await recordAnchor(order, payload);
+    }).catch(() => undefined);
+
+    let blockNumber: number | null = null;
+    try {
+      const receipt = await tx.wait();
+      blockNumber = receipt?.blockNumber ?? null;
+    } catch {
+      blockNumber = null;
+    }
+    sent.block_number = blockNumber;
+
+    await recordAnchor(order, {
+      order_id: order.id,
+      receipt_hash: receiptHash,
+      tx_hash: tx.hash,
+      explorer_url: explorerUrl,
+      block_number: blockNumber,
+      confirmed: blockNumber !== null,
+      chain_id: env.avalancheFujiChainId,
+      anchored_at: new Date().toISOString(),
+      confirmed_at: blockNumber !== null ? new Date().toISOString() : null,
+    }).catch(() => undefined);
+
     return {
-      status: "anchored",
+      status: blockNumber === null ? "pending" : "anchored",
       anchored: true,
       tx_hash: tx.hash,
       explorer_url: explorerUrl,
-      block_number: receipt?.blockNumber ?? null,
+      block_number: blockNumber,
     };
   } catch (error) {
+    const sent = sentAnchors.get(key);
+    if (sent) {
+      return {
+        status: sent.block_number === null ? "pending" : "anchored",
+        anchored: true,
+        tx_hash: sent.tx_hash,
+        explorer_url: sent.explorer_url,
+        block_number: sent.block_number,
+      };
+    }
     return {
       status: "error",
       anchored: false,
       error: error instanceof Error ? error.message : "AVALANCHE_FUJI_ANCHOR_FAILED",
     };
+  }
+}
+
+export async function getOrderReceiptAnchor(order: OrderDTO): Promise<FujiAnchorStatus> {
+  if (!isConfigured()) return { status: "prepared", anchored: false };
+  const receiptHash = orderReceiptHash(order);
+  const key = anchorKey(order, receiptHash);
+  const existing = anchorPromises.get(key);
+  if (existing) return existing;
+  const promise = anchorOrderReceipt(order, receiptHash);
+  anchorPromises.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    anchorPromises.delete(key);
   }
 }
