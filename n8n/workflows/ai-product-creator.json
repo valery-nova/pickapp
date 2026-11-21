@@ -31,7 +31,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://localhost:3000/api/products/draft",
+        "url": "={{$env.PICKAPP_APP_URL}}/api/products/draft",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -41,7 +41,7 @@
             },
             {
               "name": "x-pickapp-webhook-secret",
-              "value": "{{$env.N8N_WEBHOOK_SECRET}}"
+              "value": "={{$env.N8N_WEBHOOK_SECRET}}"
             }
           ]
         },
