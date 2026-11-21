@@ -1,0 +1,36 @@
+name: Flutter APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - devin/pickapp-mvp
+    paths:
+      - "mobile/**"
+      - ".github/workflows/flutter-apk.yml"
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      API_BASE_URL: ${{ vars.PICKAPP_API_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Create Android platform files
+        working-directory: mobile
+        run: flutter create . --platforms=android --project-name pickapp_mobile --org com.pickapp
+      - name: Install dependencies
+        working-directory: mobile
+        run: flutter pub get
+      - name: Build debug APK
+        working-directory: mobile
+        run: flutter build apk --debug --dart-define=API_BASE_URL=${API_BASE_URL:-https://gone-except-devices-chapters.trycloudflare.com}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pickapp-apk
+          path: mobile/build/app/outputs/flutter-apk/app-debug.apk
