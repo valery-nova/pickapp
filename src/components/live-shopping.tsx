@@ -46,7 +46,7 @@ function NavIcon({ children }: { children: ReactNode }) {
 }
 
 export function LiveShopping({ session, storeSlug, businessName }: { session: LiveSessionDTO; storeSlug: string; businessName: string }) {
-  const featured = session.featured_products[0] ?? null;
+  const featuredProducts = session.featured_products;
   const [comments, setComments] = useState<LiveCommentDTO[]>([]);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [liked, setLiked] = useState(false);
@@ -55,7 +55,21 @@ export function LiveShopping({ session, storeSlug, businessName }: { session: Li
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ title: string; sub?: string } | null>(null);
+  const [featuredIndex, setFeaturedIndex] = useState(0);
+  const [commentProductId, setCommentProductId] = useState("");
+  const [saved, setSaved] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      const raw = window.localStorage.getItem("pickapp-live-saved");
+      const ids = raw ? JSON.parse(raw) : [];
+      return Array.isArray(ids) && ids.includes(session.id);
+    } catch {
+      return false;
+    }
+  });
+  const safeFeaturedIndex = featuredProducts.length === 0 ? 0 : Math.min(featuredIndex, featuredProducts.length - 1);
+  const featured = featuredProducts[safeFeaturedIndex] ?? null;
 
   const load = useCallback(async () => {
     try {
@@ -74,9 +88,35 @@ export function LiveShopping({ session, storeSlug, businessName }: { session: Li
     return () => clearInterval(timer);
   }, [load]);
 
-  function showToast(text: string) {
-    setToast(text);
+  function showToast(title: string, sub?: string) {
+    setToast({ title, sub });
     window.setTimeout(() => setToast(null), 2800);
+  }
+
+  async function share() {
+    try {
+      if (!navigator.clipboard) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(window.location.href);
+      showToast("Enlace copiado", "Comparte este Live");
+    } catch {
+      showToast("No se pudo copiar", window.location.href);
+    }
+  }
+
+  function toggleSaved() {
+    const next = !saved;
+    setSaved(next);
+    try {
+      const key = "pickapp-live-saved";
+      const raw = window.localStorage.getItem(key);
+      const ids = raw ? JSON.parse(raw) : [];
+      const set = new Set(Array.isArray(ids) ? ids : []);
+      if (next) set.add(session.id); else set.delete(session.id);
+      window.localStorage.setItem(key, JSON.stringify([...set]));
+    } catch {
+      // local favorites are best-effort
+    }
+    showToast(next ? "Guardado en favoritos" : "Quitado de favoritos", "Solo en este dispositivo");
   }
 
   async function send(event: React.FormEvent) {
@@ -88,7 +128,7 @@ export function LiveShopping({ session, storeSlug, businessName }: { session: Li
       const response = await fetch(`/api/live/sessions/${session.id}/comments`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ customer_name: name || "Cliente", message, product_id: featured?.id ?? null }),
+        body: JSON.stringify({ customer_name: name || "Cliente", message, product_id: commentProductId || null }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "No se pudo comentar");
@@ -140,13 +180,13 @@ export function LiveShopping({ session, storeSlug, businessName }: { session: Li
           <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/30 text-white backdrop-blur"><ChatIcon /></span>
           <span className="text-[11px] font-semibold">{comments.length}</span>
         </button>
-        <button type="button" onClick={() => { navigator.clipboard?.writeText(window.location.href).catch(() => undefined); showToast("Enlace copiado"); }} aria-label="Compartir" className="flex flex-col items-center gap-1">
+        <button type="button" onClick={share} aria-label="Compartir" className="flex flex-col items-center gap-1">
           <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/30 text-white backdrop-blur"><ShareIcon /></span>
           <span className="text-[11px] font-semibold">Compartir</span>
         </button>
-        <button type="button" onClick={() => showToast("Guardado en favoritos")} aria-label="Guardar" className="flex flex-col items-center gap-1">
-          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/30 text-white backdrop-blur"><SaveIcon /></span>
-          <span className="text-[11px] font-semibold">Guardar</span>
+        <button type="button" onClick={toggleSaved} aria-label="Guardar" className="flex flex-col items-center gap-1">
+          <span className={`flex h-11 w-11 items-center justify-center rounded-full bg-black/30 backdrop-blur ${saved ? "text-red-400" : "text-white"}`}><SaveIcon /></span>
+          <span className="text-[11px] font-semibold">{saved ? "Guardado" : "Guardar"}</span>
         </button>
       </aside>
 
@@ -162,18 +202,33 @@ export function LiveShopping({ session, storeSlug, businessName }: { session: Li
       </section>
 
       {featured ? (
-        <Link href={`/store/${storeSlug}/product/${featured.id}`} className="absolute bottom-24 left-4 right-24 z-30 flex items-center gap-3 rounded-[20px] border border-white/15 bg-[#191919]/90 p-3 shadow-2xl backdrop-blur-xl transition">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={featured.image_url ?? "/brand/product-placeholder.svg"} alt={featured.name} className="h-16 w-16 rounded-2xl bg-gradient-to-br from-red-400 to-red-300 object-cover" />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-bold">{featured.name}</p>
-            <div className="mt-1 flex items-center gap-3">
-              <p className="text-lg font-extrabold">{featured.price} {featured.currency}</p>
-              <p className="flex items-center gap-1 text-[11px] text-white/70"><span className="h-1.5 w-1.5 rounded-full bg-green-400" /> {stock > 0 ? `Disponible: ${stock}` : "Agotado"}</p>
+        <div className="absolute bottom-24 left-4 right-24 z-30 flex items-center gap-3 rounded-[20px] border border-white/15 bg-[#191919]/90 p-3 shadow-2xl backdrop-blur-xl">
+          {featuredProducts.length > 1 ? (
+            <div className="flex flex-col gap-2">
+              <button type="button" onClick={() => setFeaturedIndex((value) => (value - 1 + featuredProducts.length) % featuredProducts.length)} aria-label="Producto anterior" className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-lg leading-none text-white">‹</button>
+              <button type="button" onClick={() => setFeaturedIndex((value) => (value + 1) % featuredProducts.length)} aria-label="Producto siguiente" className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-lg leading-none text-white">›</button>
             </div>
-          </div>
-          <span className="rounded-full bg-white px-4 py-2 text-sm font-extrabold text-black">Reservar</span>
-        </Link>
+          ) : null}
+          <Link href={`/store/${storeSlug}/product/${featured.id}`} className="flex min-w-0 flex-1 items-center gap-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={featured.image_url ?? "/brand/product-placeholder.svg"} alt={featured.name} className="h-16 w-16 rounded-2xl bg-gradient-to-br from-red-400 to-red-300 object-cover" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-bold">{featured.name}</p>
+              <div className="mt-1 flex items-center gap-3">
+                <p className="text-lg font-extrabold">{featured.price} {featured.currency}</p>
+                <p className="flex items-center gap-1 text-[11px] text-white/70"><span className="h-1.5 w-1.5 rounded-full bg-green-400" /> {stock > 0 ? `Disponible: ${stock}` : "Agotado"}</p>
+              </div>
+            </div>
+          </Link>
+          {featuredProducts.length > 1 ? (
+            <div className="flex flex-col items-center gap-1">
+              {featuredProducts.map((product, index) => (
+                <button key={product.id} type="button" onClick={() => setFeaturedIndex(index)} aria-label={`Ver ${product.name}`} className={`h-1.5 rounded-full ${index === safeFeaturedIndex ? "w-5 bg-white" : "w-1.5 bg-white/40"}`} />
+              ))}
+            </div>
+          ) : null}
+          <Link href={`/store/${storeSlug}/product/${featured.id}`} className="rounded-full bg-white px-4 py-2 text-sm font-extrabold text-black">Reservar</Link>
+        </div>
       ) : null}
 
       <nav className="absolute inset-x-0 bottom-0 z-30 flex h-16 items-center justify-around border-t border-white/10 bg-black/95 text-[11px] font-semibold text-white/50">
@@ -202,6 +257,10 @@ export function LiveShopping({ session, storeSlug, businessName }: { session: Li
             </div>
             <form onSubmit={send} className="space-y-2 border-t border-white/10 pt-3">
               <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Tu nombre" className="w-full rounded-xl bg-white/10 px-3 py-2 text-sm outline-none" />
+              <select value={commentProductId} onChange={(event) => setCommentProductId(event.target.value)} className="w-full rounded-xl bg-white/10 px-3 py-2 text-sm outline-none">
+                <option value="" className="bg-[#101010]">Comentario general</option>
+                {featuredProducts.map((product) => <option key={product.id} value={product.id} className="bg-[#101010]">{product.name}</option>)}
+              </select>
               <div className="flex gap-2">
                 <input value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Escribe un comentario…" className="flex-1 rounded-xl bg-white/10 px-3 py-2 text-sm outline-none" />
                 <button disabled={busy} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold disabled:opacity-60">Enviar</button>
@@ -212,7 +271,7 @@ export function LiveShopping({ session, storeSlug, businessName }: { session: Li
         </div>
       ) : null}
 
-      {toast ? <div className="fixed left-1/2 top-16 z-[60] w-[85%] max-w-sm -translate-x-1/2 rounded-2xl border border-green-500 bg-[#1a1a1a] px-4 py-3 text-center text-sm font-semibold shadow-2xl">{toast}</div> : null}
+      {toast ? <div className="fixed left-1/2 top-16 z-[60] w-[85%] max-w-sm -translate-x-1/2 rounded-2xl border border-green-500 bg-[#1a1a1a] px-4 py-3 text-center shadow-2xl"><p className="text-sm font-semibold">{toast.title}</p>{toast.sub ? <p className="mt-1 break-all text-xs text-white/60">{toast.sub}</p> : null}</div> : null}
     </div>
   );
 }
