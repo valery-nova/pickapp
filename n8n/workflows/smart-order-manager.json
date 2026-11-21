@@ -25,7 +25,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://pickapp--tea708m4.preview.devinapps.com/api/orders",
+        "url": "={{$vars.PICKAPP_APP_URL}}/api/orders",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

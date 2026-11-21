@@ -2,7 +2,7 @@
 
 Import each JSON in `n8n/workflows/` as a new workflow. Replace placeholders:
 
-- `PICKAPP_APP_URL` → your app URL, default `http://localhost:3000`
+- `PICKAPP_APP_URL` → set as an n8n Variable (referenced as `{{$vars.PICKAPP_APP_URL}}`) or env var on self-hosted; point it to the deployment that owns the products/orders, default `http://localhost:3000`
 - `N8N_WEBHOOK_SECRET` → shared secret sent as `x-pickapp-webhook-secret` when the app calls n8n
 - Supabase credentials only inside n8n credentials store, never in the repo
 

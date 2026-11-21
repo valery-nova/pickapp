@@ -31,7 +31,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "https://pickapp--tea708m4.preview.devinapps.com/api/inventory",
+        "url": "={{$vars.PICKAPP_APP_URL}}/api/inventory",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
