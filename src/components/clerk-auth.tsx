@@ -30,7 +30,7 @@ export function ClerkAuth() {
           </button>
         ))}
       </div>
-      {mode === "signin" ? <SignIn /> : <SignUp />}
+      {mode === "signin" ? <SignIn routing="hash" /> : <SignUp routing="hash" />}
       <p className="text-xs text-slate-500">Si ya tienes negocio, PICKAPP te llevará a tu panel; si no, a crear tu tienda.</p>
     </div>
   );
